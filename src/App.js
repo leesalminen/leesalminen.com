@@ -14,12 +14,6 @@ function App() {
     input.setAttribute('autocorrect', 'off')
     input.setAttribute('autocapitalize', 'off')
     input.setAttribute('spellcheck', 'false')
-
-    input.addEventListener('focus', (e) => {
-      setTimeout(() => {
-        window.scrollTo(0,document.body.scrollHeight);
-      }, 100)
-    })
   })
   
   return (
