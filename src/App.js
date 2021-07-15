@@ -37,7 +37,7 @@ function App() {
         email: 'Send me an email',
         whoami: 'what is the meaning of life?',
       }}
-      msg={`Hi there, I'm Lee Salminen! Parker is my boy, and Nikki is my ol' lady.`}
+      msg={`Hi there, I'm Lee Salminen! Parker is my boy, and Nikki is my wife. Try typing help to see a list of available commands`}
     />
   );
 }
