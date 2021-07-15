@@ -1,14 +1,21 @@
 import './App.css';
+import { useEffect } from 'react';
 import Terminal from 'terminal-in-react';
 import pseudoFileSystemPlugin from 'terminal-in-react-pseudo-file-system-plugin';
 import OnMountPlugin from './OnMountPlugin';
 
 const FileSystemPlugin = pseudoFileSystemPlugin();
 
-const showMsg = () => 'Hello World'
-
-
 function App() {
+
+  useEffect(() => {
+    const input = document.querySelector('input[type="text"]')
+    input.setAttribute('autocomplete', 'off')
+    input.setAttribute('autocorrect', 'off')
+    input.setAttribute('autocapitalize', 'off')
+    input.setAttribute('spellcheck', 'false')
+  })
+  
   return (
     <Terminal
       plugins={[
@@ -23,15 +30,12 @@ function App() {
       barColor='black'
       style={{ fontWeight: "bold", fontSize: "1em" }}
       commands={{
-        'open-google': () => window.open('https://www.google.com/', '_blank'),
-        showmsg: showMsg,
-        popup: () => alert('Terminal in React')
+        email: () => 'My email is <a href=me@leesalminen.com. Get in touch!',
+        whoami: () => '42',
       }}
       descriptions={{
-        'open-google': 'opens google.com',
-        showmsg: 'shows a message',
-        alert: 'alert', 
-        popup: 'alert',
+        email: 'Send me an email',
+        whoami: 'what is the meaning of life?',
       }}
       msg={`Hi there, I'm Lee Salminen! Parker is my boy, and Nikki is my ol' lady.`}
     />
