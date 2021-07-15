@@ -11,7 +11,6 @@ export default class OnMountPlugin extends PluginBase {
       const createDir = this.api.getPluginMethod('PseudoFileSystem', 'createDir')
       const removeDir = this.api.getPluginMethod('PseudoFileSystem', 'removeDir')
       const parsePath = this.api.getPluginMethod('PseudoFileSystem', 'parsePath')
-      const createFile = this.api.getPluginMethod('PseudoFileSystem', 'writeFile')
       
       removeDir(parsePath('/home/user'))
       createDir(parsePath('/home/lee'))
