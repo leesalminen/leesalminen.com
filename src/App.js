@@ -30,12 +30,14 @@ function App() {
       barColor='black'
       style={{ fontWeight: "bold", fontSize: "1em" }}
       commands={{
-        email: () => 'My email is <a href=me@leesalminen.com. Get in touch!',
+        email: () => 'My email is me@leesalminen.com. Get in touch!',
         whoami: () => '42',
+        about: () => `I've lived in/around NYC, Buffalo NY, Boulder CO, Los Angeles CL, Dominical CR.`
       }}
       descriptions={{
         email: 'Send me an email',
         whoami: 'what is the meaning of life?',
+        about: 'Want to know a curated selection of things about me?'
       }}
       msg={`Hi there, I'm Lee Salminen! Parker is my boy, and Nikki is my wife. Try typing help to see a list of available commands`}
     />
