@@ -10,7 +10,7 @@
     "react-dom": "^17.0.2",
     "react-scripts": "^5.0.0",
     "terminal-in-react": "^4.3.1",
-    "terminal-in-react-pseudo-file-system-plugin": "github:leesalminen/terminal-in-react-pseudo-file-system-plugin#adeba90e1f7183848e055c24554a47b08fe68395",
+    "terminal-in-react-pseudo-file-system-plugin": "https://github.com/leesalminen/terminal-in-react-pseudo-file-system-plugin#adeba90e1f7183848e055c24554a47b08fe68395",
     "web-vitals": "^2.1.4"
   },
   "scripts": {
