@@ -43,7 +43,9 @@ function App() {
         }}
         msg={`Hi there, I'm Lee Salminen! I'm a father, husband, technologist and entrepreneur. Try typing help to see a list of available commands`}
       />
-    <NostrChatWidget />
+    <NostrChatWidget
+      recipientPk={'5f498ff809e02c5685e3bda193fcd7147a22e7b3971079549b0bb37643f3cacc'}
+      relayUrls={['wss://no.str.cr', 'wss://relay.damus.io', 'wss://nostr.fly.dev', 'wss://nostr.robotechy.com']} />
     </div>
   );
 }

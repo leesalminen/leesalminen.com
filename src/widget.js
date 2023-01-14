@@ -1,7 +1,13 @@
 import './widget.scss';
 
-import { useState, useEffect, useRef } from 'react'
-import { NostrProvider, dateToUnix, useProfile, useNostrEvents, useNostr } from "nostr-react";
+import { useState, useEffect } from 'react'
+import { 
+	NostrProvider, 
+	dateToUnix, 
+	useProfile, 
+	useNostrEvents, 
+	useNostr 
+} from "nostr-react"
 
 import {
   signEvent,
@@ -10,9 +16,6 @@ import {
   getPublicKey,
   nip04,
 } from "nostr-tools"
-
-const theirPublicKey = '5f498ff809e02c5685e3bda193fcd7147a22e7b3971079549b0bb37643f3cacc'
-const relayUrls = ['wss://no.str.cr', 'wss://relay.damus.io', 'wss://nostr.fly.dev', 'wss://nostr.robotechy.com']
 
 const generateKeys = () => {
 	let sk = generatePrivateKey()
@@ -36,21 +39,10 @@ const generateKeys = () => {
 	return keys
 }
 
-function NostrChatWidget () {
-	return (
-		<NostrProvider relayUrls={relayUrls}>
-			<NostrWidget
-				theirPublicKey={theirPublicKey} />
-		</NostrProvider>
-	)
-}
-
-function NostrWidget({theirPublicKey}) {
+const NostrChatWidget = ({recipientPk, relayUrls}) => {
 	const [showWidget, setShowWidget] = useState(false)
 
 	const keys = generateKeys()
-
-	const { data: userData } = useProfile({pubkey: theirPublicKey});
 
 	return (
 		<div className="NostrChatWidget">
@@ -61,51 +53,63 @@ function NostrWidget({theirPublicKey}) {
 			}
 
 			{showWidget &&
-				<section className="avenue-messenger">
-				  	<div className="menu">
-				   		<div className="button" onClick={() => {setShowWidget(false)}}>&#10005;</div>
-				  	</div>
-				  	<div className="agent-face">
-				    	<div className="half">
-				     		<img className="agent circle" src={userData && userData.picture ? userData.picture : ''} alt="pfp" />
-				     	</div>
-				  	</div>
-					<div className="chat">
-				  		<div className="chat-title">
-				    		<h1>{userData && userData.name ? userData.name : ''}</h1>
-				    		<h2>{userData && userData.about ? userData.about : ''}</h2>
-				  		</div>
-				  		<div className="messages">
-				    		<NostrEvents
-				    			keys={keys}
-				    			authors={[theirPublicKey, keys.pk]} />
-				  		</div>
-					  	<div className="message-box">
-					    	<NostrPublish
-					    		keys={keys}
-					    		theirPublicKey={theirPublicKey} />
-					  	</div>
-					</div>
-				</section>
+				<NostrProvider relayUrls={relayUrls}>
+					<NostrWidgetContainer
+						keys={keys}
+						recipientPk={recipientPk}
+						setShowWidget={setShowWidget} />
+				</NostrProvider>
 			}
 		</div>
 	)
 }
 
-function NostrPublish({keys, theirPublicKey}) {
+const NostrWidgetContainer = ({ keys, recipientPk, setShowWidget }) => {
+	const { data: userData } = useProfile({pubkey: recipientPk});
+
+	return (
+		<section className="avenue-messenger">
+		  <div className="menu">
+		   		<div className="button" onClick={() => {setShowWidget(false)}}>&#10005;</div>
+		  	</div>
+		  	<div className="agent-face">
+		    	<div className="half">
+		     		<img className="agent circle" src={userData && userData.picture ? userData.picture : ''} alt="pfp" />
+		     	</div>
+		  	</div>
+			<div className="chat">
+	  		<div className="chat-title">
+	    		<h1>{userData && userData.name ? userData.name : ''}</h1>
+	    		<h2>{userData && userData.about ? userData.about : ''}</h2>
+	  		</div>
+	  		<div className="messages">
+	    		<NostrEvents
+	    			keys={keys}
+	    			authors={[recipientPk, keys.pk]}
+	    			recipientPk={recipientPk} />
+	  		</div>
+		  	<div className="message-box">
+		    	<NostrPublish
+		    		keys={keys}
+		    		recipientPk={recipientPk} />
+		  	</div>
+			</div>
+		</section>
+	)
+}
+
+const NostrPublish = ({keys, recipientPk}) => {
 	const { publish } = useNostr();
-	const messageRef = useRef(null);
+	const [message, setMessage] = useState('')
 
 	const sendMessage = async () => {
-		const message = messageRef.current.value
-
-		let ciphertext = await nip04.encrypt(keys.sk, theirPublicKey, message)
+		let ciphertext = await nip04.encrypt(keys.sk, recipientPk, message)
 
 		let event = {
 		  kind: 4,
 		  pubkey: keys.pk,
 		  created_at: dateToUnix(),
-		  tags: [['p', theirPublicKey]],
+		  tags: [['p', recipientPk]],
 		  content: ciphertext,
 		}
 		event.id = getEventHash(event)
@@ -113,18 +117,28 @@ function NostrPublish({keys, theirPublicKey}) {
 
 		publish(event)
 
-		messageRef.current.value = ''
+		setMessage('')
 	}
+
+	const handleChange = (event) => {
+    setMessage(event.target.value)
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      sendMessage()
+    }
+  }
 
 	return (
 		<>
-			<textarea ref={messageRef} type="text" className="message-input" placeholder="Type message..."></textarea>
-	    	<button type="submit" className="message-submit" onClick={sendMessage}>Send</button>
-	    </>
+			<input onChange={handleChange} onKeyDown={handleKeyDown} value={message} type="text" className="message-input" placeholder="Type message..." />
+	    <button type="submit" className="message-submit" onClick={sendMessage}>Send</button>
+	  </>
 	)	
 }
 
-function NostrEvents({ authors, keys }) {
+const NostrEvents = ({ authors, keys, recipientPk }) => {
 	const { events } = useNostrEvents({
 	    filter: {
 	    	kinds: [4],
@@ -146,7 +160,7 @@ function NostrEvents({ authors, keys }) {
 				return (
 					<NostrEvent
 						key={message.id}
-						theirPublicKey={theirPublicKey}
+						recipientPk={recipientPk}
 						keys={keys}
 						message={message} />
 				)
@@ -156,16 +170,24 @@ function NostrEvents({ authors, keys }) {
 	)
 }
 
-function NostrEvent({message, keys, theirPublicKey}) {
+const NostrEvent = ({message, keys, recipientPk}) => {
 	const [plaintext, setPlaintext] = useState('');
 
 	useEffect(() => {
-     	async function getPlaintext() {
-         	const plaintext = await nip04.decrypt(keys.sk, theirPublicKey, message.content)
-         	setPlaintext(plaintext)
-     	}
-     	getPlaintext();
-  	}, [])
+   	const getPlaintext = async () => {
+   		try {
+       	const plaintext = await nip04.decrypt(keys.sk, recipientPk, message.content)
+       	setPlaintext(plaintext)
+      } catch (e) {
+      	return
+      }
+   	}
+   	getPlaintext();
+  }, [])
+
+	if(!plaintext) {
+		return (<></>)
+	}
 
 	return (
 		<div key={message.id} className={message.pubkey == keys.pk ? 'message message-personal' : 'message'}>
