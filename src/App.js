@@ -3,7 +3,8 @@ import { useEffect } from 'react';
 import Terminal from 'terminal-in-react';
 import pseudoFileSystemPlugin from 'terminal-in-react-pseudo-file-system-plugin';
 import OnMountPlugin from './OnMountPlugin';
-import NostrChatWidget from './widget'
+import NostrChatWidget from 'nostr-chat-widget-react'
+
 
 const FileSystemPlugin = pseudoFileSystemPlugin();
 
