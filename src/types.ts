@@ -1,3 +1,5 @@
+import type { VirtualFs } from './fs.js';
+
 export type CommandContext = {
   args: string[];
   raw: string;
@@ -9,6 +11,10 @@ export type CommandContext = {
   setTheme: (name: string) => boolean;
   listThemes: () => string[];
   signal: AbortSignal;
+  cwd: string;
+  setCwd: (path: string) => void;
+  fs: VirtualFs;
+  pipedInput?: string;
 };
 
 export type Command = {
@@ -46,9 +52,13 @@ export type Theme = {
 
 // Chrome built-in Prompt API (window.LanguageModel) — typed loosely since the API is evolving.
 declare global {
+  type LanguageModelContentPart =
+    | { type: 'text'; value: string }
+    | { type: 'image'; value: Blob | ImageBitmap | HTMLImageElement };
+
   interface LanguageModelMessage {
     role: 'system' | 'user' | 'assistant';
-    content: string;
+    content: string | LanguageModelContentPart[];
   }
 
   interface LanguageModelCreateOptions {
@@ -67,8 +77,8 @@ declare global {
   }
 
   interface LanguageModelSession {
-    prompt(input: string, options?: LanguageModelPromptOptions): Promise<string>;
-    promptStreaming(input: string, options?: LanguageModelPromptOptions): ReadableStream<string>;
+    prompt(input: string | LanguageModelContentPart[] | LanguageModelMessage[], options?: LanguageModelPromptOptions): Promise<string>;
+    promptStreaming(input: string | LanguageModelContentPart[] | LanguageModelMessage[], options?: LanguageModelPromptOptions): ReadableStream<string>;
     destroy(): void;
     clone(): Promise<LanguageModelSession>;
   }
@@ -81,6 +91,10 @@ declare global {
 
   interface Window {
     LanguageModel?: LanguageModelStatic;
+    // SpeechRecognition is browser-vendor-prefixed and not in the standard
+    // DOM lib in this TS version; voice.ts pulls them off the window with `any`.
+    SpeechRecognition?: unknown;
+    webkitSpeechRecognition?: unknown;
   }
 
   const LanguageModel: LanguageModelStatic | undefined;

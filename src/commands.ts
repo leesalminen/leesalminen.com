@@ -1,5 +1,8 @@
 import type { Command, CommandContext } from './types.js';
 import { ansi, banner } from './banner.js';
+import { renderMarkdown } from './render/md.js';
+import { abbreviate, resolvePath } from './fs.js';
+import type { FsNode } from './fs.js';
 
 const c = ansi.fg;
 const R = ansi.reset;
@@ -26,41 +29,6 @@ const FORTUNES = [
   'Pura vida 🌴',
   'Stay hungry, stay foolish.',
   'Talk is cheap. Show me the code. — Linus Torvalds',
-];
-
-const PROJECTS: Array<{ name: string; tag: string; blurb: string }> = [
-  {
-    name: 'Bitcoin Jungle',
-    tag: 'open source · circular economy',
-    blurb: 'A Bitcoin community + Lightning wallet in southern Costa Rica.',
-  },
-  {
-    name: 'Galoy / Blink contributions',
-    tag: 'lightning · open source',
-    blurb: 'Patches and integrations for the open-source Bitcoin banking stack.',
-  },
-  {
-    name: 'leesalminen.com',
-    tag: 'this site',
-    blurb: 'An agentic terminal portfolio. The Prompt API guides you through it.',
-  },
-];
-
-const SKILLS: Record<string, string[]> = {
-  Languages: ['TypeScript', 'JavaScript', 'Go', 'Rust', 'Python', 'Bash'],
-  Frontend: ['React', 'Vite', 'Svelte', 'Web Components', 'xterm.js'],
-  Backend: ['Node.js', 'Postgres', 'Redis', 'GraphQL', 'gRPC'],
-  Bitcoin: ['Lightning', 'LNURL', 'NWC', 'Liquid', 'Nostr'],
-  Infra: ['Docker', 'Kubernetes', 'NixOS', 'Cloudflare', 'Linux'],
-  AI: ['On-device LLMs', 'Tool use / agents', 'Prompt API', 'RAG'],
-};
-
-const LOCATIONS = [
-  ['🗽 Buffalo, NY', 'Where it began.'],
-  ['🗽 New York City, NY', 'Where it sped up.'],
-  ['🏔  Boulder, CO', 'Where it leveled up.'],
-  ['🌴 Los Angeles, CA', 'Where it stretched out.'],
-  ['🌊 Dominical, Costa Rica', 'Pura vida.'],
 ];
 
 const SOCIALS: Array<{ label: string; value: string; url?: string }> = [
@@ -94,7 +62,38 @@ function table(rows: string[][], pad = 2): string {
 }
 
 function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+}
+
+// ---------- FS HELPERS ----------
+
+function nodeIsDir(n: FsNode): n is { type: 'dir'; children: Record<string, FsNode> } {
+  return n.type === 'dir';
+}
+
+function nodeKind(n: FsNode): string {
+  if (n.type === 'dir') return 'dir';
+  if (n.type === 'demo') return 'demo';
+  return 'file';
+}
+
+function colorEntry(name: string, n: FsNode): string {
+  if (n.type === 'dir') return `${c.brightCyan}${name}/${R}`;
+  if (n.type === 'demo') return `${c.brightGreen}${name}*${R}`;
+  return `${c.white}${name}${R}`;
+}
+
+// Resolve a name relative to cwd. Defaults to the FS shortcut: bare names like
+// "about" map to ~/about.md so the user can still type `cat about` like before.
+function shortcutToPath(ctx: CommandContext, name: string): string {
+  // Try the literal path first.
+  const direct = resolvePath(ctx.cwd, name);
+  if (ctx.fs.get(direct)) return direct;
+  // Try ~/<name>.md (e.g. `cat about`).
+  const md = resolvePath(ctx.cwd, `~/${name}.md`);
+  if (ctx.fs.get(md)) return md;
+  return direct;
 }
 
 // ---------- COMMANDS ----------
@@ -112,21 +111,183 @@ const commands: Command[] = [
       ctx.print(`${B}Commands${R}`);
       ctx.print(table(rows));
       ctx.print('');
-      ctx.print(`${D}Tip: pipe nothing, escape nothing. Just type a command and hit ↵.${R}`);
+      ctx.print(`${D}Tip: try ${B}tree${R}${D}, then ${B}cat projects/readme.md${R}${D}, then ${B}run projects/bitcoin-jungle/demo${R}${D}.${R}`);
+      ctx.print(`${D}Pipes work: ${B}find bitcoin | head 3${R}${D}.${R}`);
     },
   },
   {
+    name: 'pwd',
+    description: 'print working directory',
+    handler: (ctx) => ctx.cwd,
+  },
+  {
+    name: 'cd',
+    description: 'change working directory',
+    usage: 'cd <path>',
+    handler: (ctx) => {
+      const arg = ctx.args[0] ?? '~';
+      const abs = resolvePath(ctx.cwd, arg);
+      const node = ctx.fs.get(abs);
+      if (!node) return `${c.red}cd: no such directory: ${arg}${R}`;
+      if (node.type !== 'dir') return `${c.red}cd: not a directory: ${arg}${R}`;
+      ctx.setCwd(abs);
+    },
+  },
+  {
+    name: 'ls',
+    description: 'list directory contents',
+    usage: 'ls [path]',
+    handler: (ctx) => {
+      const arg = ctx.args[0] ?? '.';
+      const abs = resolvePath(ctx.cwd, arg);
+      const node = ctx.fs.get(abs);
+      if (!node) return `${c.red}ls: ${arg}: no such file or directory${R}`;
+      if (node.type !== 'dir') {
+        return colorEntry(arg.split('/').pop() ?? arg, node);
+      }
+      const entries = ctx.fs.list(abs) ?? [];
+      if (entries.length === 0) return `${D}(empty)${R}`;
+      return entries.map(e => colorEntry(e.name, e.node)).join('  ');
+    },
+  },
+  {
+    name: 'tree',
+    description: 'recursive directory listing',
+    usage: 'tree [path]',
+    handler: (ctx) => {
+      const arg = ctx.args[0] ?? '.';
+      const abs = resolvePath(ctx.cwd, arg);
+      const node = ctx.fs.get(abs);
+      if (!node) return `${c.red}tree: ${arg}: no such directory${R}`;
+      const lines: string[] = [];
+      lines.push(`${c.brightCyan}${abbreviate(abs)}${R}`);
+      if (node.type === 'dir') {
+        renderTree(node, '', lines);
+      }
+      return lines.join('\r\n');
+    },
+  },
+  {
+    name: 'cat',
+    description: 'show the contents of a file',
+    usage: 'cat <path>',
+    handler: (ctx) => {
+      const arg = ctx.args[0];
+      if (!arg) return `${c.red}cat: missing path${R}`;
+      const abs = shortcutToPath(ctx, arg);
+      const node = ctx.fs.get(abs);
+      if (!node) return `${c.red}cat: ${arg}: no such file${R}`;
+      if (node.type === 'dir') return `${c.red}cat: ${arg}: is a directory${R}`;
+      if (node.type === 'demo') return `${D}cat: ${arg}: this is a runnable demo. Try ${B}run ${arg}${R}${D}.${R}`;
+      if (node.mime === 'text/markdown') return renderMarkdown(node.content);
+      return node.content;
+    },
+  },
+  {
+    name: 'find',
+    description: 'search files by name or content',
+    usage: 'find <query>',
+    handler: (ctx) => {
+      const q = (ctx.args.join(' ') || '').trim().toLowerCase();
+      if (!q) return `${c.red}find: missing query${R}`;
+      const hits: string[] = [];
+      for (const { path, node } of ctx.fs.walk('/home/lee')) {
+        if (node.type === 'dir') continue;
+        const nameMatch = path.toLowerCase().includes(q);
+        const contentMatch = node.type === 'file' && node.content.toLowerCase().includes(q);
+        if (nameMatch || contentMatch) {
+          const kind = node.type === 'demo' ? `${c.brightGreen}[demo]${R}` : `${c.brightCyan}[file]${R}`;
+          hits.push(`${kind} ${abbreviate(path)}`);
+        }
+      }
+      if (hits.length === 0) return `${D}no matches for "${q}"${R}`;
+      return hits.join('\r\n');
+    },
+  },
+  {
+    name: 'run',
+    description: 'run a demo (look for *-marked entries in tree)',
+    usage: 'run <demo-path>',
+    handler: async (ctx) => {
+      const arg = ctx.args[0];
+      if (!arg) {
+        return `${c.red}run: missing path${R}  ${D}try: run projects/bitcoin-jungle/demo${R}`;
+      }
+      const abs = shortcutToPath(ctx, arg);
+      const node = ctx.fs.get(abs);
+      if (!node) {
+        ctx.print(`${c.red}run: ${arg}: not found${R}`);
+        return;
+      }
+      if (node.type !== 'demo') {
+        ctx.print(`${c.red}run: ${arg}: not a demo (it's a ${nodeKind(node)})${R}`);
+        return;
+      }
+      try {
+        const mod = await node.load();
+        await mod.run({ ...ctx, args: ctx.args.slice(1), raw: ctx.args.slice(1).join(' ') });
+      } catch (err) {
+        if ((err as Error)?.name === 'AbortError') {
+          ctx.print(`${D}^C${R}`);
+          return;
+        }
+        ctx.print(`${c.red}demo error: ${(err as Error).message}${R}`);
+      }
+    },
+  },
+  // ---- pipe filters ----
+  {
+    name: 'grep',
+    description: 'filter lines matching a pattern',
+    usage: 'grep <pattern>',
+    handler: (ctx) => {
+      const input = ctx.pipedInput ?? '';
+      const q = ctx.args.join(' ');
+      if (!q) return `${c.red}grep: missing pattern${R}`;
+      const re = new RegExp(q, 'i');
+      return input
+        .split(/\r?\n/)
+        .filter(line => re.test(stripAnsi(line)))
+        .join('\r\n');
+    },
+  },
+  {
+    name: 'head',
+    description: 'first N lines of input',
+    usage: 'head [N]',
+    handler: (ctx) => {
+      const n = Math.max(1, parseInt(ctx.args[0] ?? '10', 10));
+      const input = ctx.pipedInput ?? '';
+      return input.split(/\r?\n/).slice(0, n).join('\r\n');
+    },
+  },
+  {
+    name: 'tail',
+    description: 'last N lines of input',
+    usage: 'tail [N]',
+    handler: (ctx) => {
+      const n = Math.max(1, parseInt(ctx.args[0] ?? '10', 10));
+      const input = ctx.pipedInput ?? '';
+      const lines = input.split(/\r?\n/);
+      return lines.slice(Math.max(0, lines.length - n)).join('\r\n');
+    },
+  },
+  {
+    name: 'wc',
+    description: 'count lines, words, chars of input',
+    handler: (ctx) => {
+      const input = ctx.pipedInput ?? '';
+      const lines = input.split(/\r?\n/).length;
+      const words = input.split(/\s+/).filter(Boolean).length;
+      const chars = stripAnsi(input).length;
+      return `  ${lines} lines  ${words} words  ${chars} chars`;
+    },
+  },
+  // ---- top-level info shortcuts (each delegates to cat) ----
+  {
     name: 'about',
     description: 'short bio',
-    handler: () =>
-      [
-        `Hi, I'm ${B}${c.brightGreen}Lee Salminen${R} — father, husband, technologist, entrepreneur.`,
-        ``,
-        `I build software, mostly around Bitcoin, Lightning, and the open web.`,
-        `I've lived in Buffalo, NYC, Boulder, LA, and Costa Rica.`,
-        ``,
-        `Try ${B}projects${R}, ${B}skills${R}, ${B}locations${R}, or ${B}contact${R} for more.`,
-      ].join('\r\n'),
+    handler: (ctx) => renderFile(ctx, '~/about.md'),
   },
   {
     name: 'whoami',
@@ -136,13 +297,7 @@ const commands: Command[] = [
   {
     name: 'contact',
     description: 'how to reach me',
-    handler: () => {
-      const rows = SOCIALS.map(s => [
-        `  ${c.brightYellow}${s.label}${R}`,
-        s.url ? `${c.cyan}${s.url}${R}` : s.value,
-      ]);
-      return table(rows);
-    },
+    handler: (ctx) => renderFile(ctx, '~/contact.md'),
   },
   {
     name: 'email',
@@ -152,68 +307,39 @@ const commands: Command[] = [
   {
     name: 'projects',
     description: 'things I have built',
-    handler: () => {
-      const lines: string[] = [];
-      for (const p of PROJECTS) {
-        lines.push(`${B}${c.brightCyan}${p.name}${R} ${D}— ${p.tag}${R}`);
-        lines.push(`  ${p.blurb}`);
-        lines.push('');
-      }
-      return lines.join('\r\n').trimEnd();
-    },
+    handler: (ctx) => renderFile(ctx, '~/projects/readme.md'),
   },
   {
     name: 'skills',
     description: 'what I work with',
-    handler: () => {
-      const lines: string[] = [];
-      for (const [category, items] of Object.entries(SKILLS)) {
-        lines.push(`${B}${c.brightYellow}${category}${R}`);
-        lines.push(`  ${items.map(i => `${c.green}${i}${R}`).join(`${D} · ${R}`)}`);
-      }
-      return lines.join('\r\n');
-    },
+    handler: (ctx) => renderFile(ctx, '~/skills.md'),
   },
   {
     name: 'locations',
     description: 'places I have called home',
-    handler: () => LOCATIONS.map(([place, blurb]) => `  ${B}${place}${R}  ${D}${blurb}${R}`).join('\r\n'),
+    handler: (ctx) => renderFile(ctx, '~/locations.md'),
   },
   {
     name: 'now',
     description: 'what I am up to right now',
-    handler: () =>
-      [
-        `${B}Currently${R}:`,
-        `  • Building open-source things around Bitcoin & Lightning`,
-        `  • Tinkering with on-device AI agents (you're using one)`,
-        `  • Raising kids, climbing mountains, riding waves`,
-      ].join('\r\n'),
+    handler: (ctx) => renderFile(ctx, '~/now.md'),
   },
   {
     name: 'interests',
     description: 'things I think about',
-    handler: () =>
-      [
-        '⚡ Bitcoin, Lightning, sound money',
-        '🌐 The open web, Nostr, freedom tech',
-        '🤖 On-device AI, agents, the offline-first future',
-        '🏔  Mountains, surf, the outdoors',
-        '👨‍👩‍👦 Family',
-      ]
-        .map(x => '  ' + x)
-        .join('\r\n'),
+    handler: (ctx) => renderFile(ctx, '~/interests.md'),
   },
   {
     name: 'family',
     description: 'the people I love',
-    handler: () =>
-      [
-        `  ${c.brightMagenta}❤  Nikki${R}  ${D}— wife, partner-in-crime${R}`,
-        `  ${c.brightCyan}🧒 Parker${R} ${D}— son, future captain${R}`,
-        `  ${c.brightGreen}🐾 ...${R}     ${D}— the rest is offline${R}`,
-      ].join('\r\n'),
+    handler: (ctx) => renderFile(ctx, '~/family.md'),
   },
+  {
+    name: 'writing',
+    description: 'short pieces I have written',
+    handler: (ctx) => renderFile(ctx, '~/writing/readme.md'),
+  },
+  // ---- fun + system ----
   {
     name: 'banner',
     description: 'show the welcome banner again',
@@ -334,47 +460,6 @@ const commands: Command[] = [
     },
   },
   {
-    name: 'ls',
-    description: 'list the imaginary filesystem',
-    handler: (ctx) => {
-      const dirs: Record<string, string[]> = {
-        '/': ['home', 'projects', 'about.txt'],
-        '/home': ['lee', 'nikki', 'parker'],
-        '/home/lee': ['README', 'todo.md', '.secrets'],
-        '/projects': PROJECTS.map(p => p.name.toLowerCase().replace(/\s+/g, '-')),
-      };
-      const path = ctx.args[0] || '/';
-      const entries = dirs[path];
-      if (!entries) return `${c.red}ls: ${path}: no such directory${R}`;
-      return entries.map(e => (e.endsWith('.txt') || e.endsWith('.md') ? e : `${c.brightCyan}${e}${R}`)).join('  ');
-    },
-  },
-  {
-    name: 'cat',
-    description: 'read a fake file',
-    usage: 'cat <path>',
-    handler: (ctx) => {
-      const path = ctx.args[0] || '';
-      const files: Record<string, string> = {
-        '/about.txt': `Lee Salminen — father, husband, technologist, entrepreneur.\nSee 'about' for more.`,
-        '/home/lee/README': `42`,
-        '/home/lee/todo.md':
-          `- [x] make a terminal portfolio\r\n- [x] add fun commands\r\n- [x] wire up an on-device AI agent\r\n- [ ] add more easter eggs`,
-        '/home/lee/.secrets': `${c.red}Permission denied.${R}`,
-        '/home/nikki/README': `hi 💚`,
-        '/home/parker/README': `yo`,
-      };
-      const body = files[path];
-      if (body === undefined) return `${c.red}cat: ${path}: no such file${R}`;
-      return body;
-    },
-  },
-  {
-    name: 'pwd',
-    description: 'print working directory',
-    handler: () => '/home/lee',
-  },
-  {
     name: 'neofetch',
     description: 'system info, terminal-style',
     handler: () => {
@@ -470,9 +555,9 @@ const commands: Command[] = [
   },
   {
     name: 'ai',
-    description: 'toggle the on-device AI guide',
+    description: 'toggle the on-device AI guide  (ai voice / ai forget)',
     handler: () => {
-      // The runtime intercepts this — see main.ts. Stub here just for help/listing.
+      // The runtime intercepts this — see main.ts.
       return `${D}(handled by the runtime)${R}`;
     },
   },
@@ -501,6 +586,25 @@ const commands: Command[] = [
   },
 ];
 
+function renderTree(node: { type: 'dir'; children: Record<string, FsNode> }, prefix: string, out: string[]): void {
+  const entries = Object.entries(node.children);
+  entries.forEach(([name, child], i) => {
+    const last = i === entries.length - 1;
+    const branch = last ? '└── ' : '├── ';
+    out.push(`${D}${prefix}${branch}${R}${colorEntry(name, child)}`);
+    if (nodeIsDir(child)) {
+      renderTree(child, prefix + (last ? '    ' : '│   '), out);
+    }
+  });
+}
+
+function renderFile(ctx: CommandContext, relPath: string): string {
+  const abs = resolvePath(ctx.cwd, relPath);
+  const node = ctx.fs.get(abs);
+  if (!node || node.type !== 'file') return `${c.red}missing: ${relPath}${R}`;
+  return renderMarkdown(node.content);
+}
+
 let registry: Map<string, Command> | null = null;
 
 function buildRegistry(): Map<string, Command> {
@@ -522,7 +626,32 @@ export function listCommandNames(includeHidden = false): string[] {
   return commands.filter(c => includeHidden || !c.hidden).map(c => c.name);
 }
 
-export async function runCommand(line: string, ctx: Omit<CommandContext, 'args' | 'raw' | 'signal'> & { signal: AbortSignal }): Promise<void> {
+// Split a line by unquoted | pipes.
+export function splitPipes(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    if (ch === '|' && !inSingle && !inDouble) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim()).filter(Boolean);
+}
+
+type RunOpts = Omit<CommandContext, 'args' | 'raw' | 'signal' | 'pipedInput'> & {
+  signal: AbortSignal;
+};
+
+export async function runCommand(line: string, ctx: RunOpts, pipedInput?: string): Promise<void> {
   const trimmed = line.trim();
   if (!trimmed) return;
   const parts = trimmed.split(/\s+/);
@@ -533,7 +662,7 @@ export async function runCommand(line: string, ctx: Omit<CommandContext, 'args' 
     ctx.print(`${c.red}command not found: ${name}${R}  ${D}(try ${B}help${R}${D})${R}`);
     return;
   }
-  const fullCtx: CommandContext = { ...ctx, args, raw: trimmed };
+  const fullCtx: CommandContext = { ...ctx, args, raw: trimmed, pipedInput };
   try {
     const result = await cmd.handler(fullCtx);
     if (typeof result === 'string' && result.length > 0) {
@@ -546,4 +675,27 @@ export async function runCommand(line: string, ctx: Omit<CommandContext, 'args' 
     }
     ctx.print(`${c.red}error: ${(err as Error).message}${R}`);
   }
+}
+
+// Run a full pipeline `cmd1 | cmd2 | cmd3`. All but the last segment run with
+// a captured-output ctx; the last segment runs against the real ctx.
+export async function runPipeline(line: string, ctx: RunOpts): Promise<void> {
+  const segments = splitPipes(line);
+  if (segments.length === 0) return;
+  if (segments.length === 1) {
+    await runCommand(segments[0], ctx);
+    return;
+  }
+  let piped = '';
+  for (let i = 0; i < segments.length - 1; i++) {
+    const collected: string[] = [];
+    const captureCtx: RunOpts = {
+      ...ctx,
+      print: (l: string) => collected.push(l),
+      printRaw: (t: string) => collected.push(t),
+    };
+    await runCommand(segments[i], captureCtx, piped);
+    piped = collected.map(stripAnsi).join('\n').replace(/\r\n/g, '\n').trim();
+  }
+  await runCommand(segments[segments.length - 1], ctx, piped);
 }

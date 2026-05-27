@@ -3,11 +3,16 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { Theme } from './types.js';
 import { ansi } from './banner.js';
-import { listCommandNames, runCommand } from './commands.js';
+import { listCommandNames, runPipeline } from './commands.js';
+import { VirtualFs, HOME } from './fs.js';
 
 const c = ansi.fg;
 const R = ansi.reset;
 const B = ansi.bold;
+
+const HISTORY_KEY = 'lee-terminal-history';
+const CWD_KEY = 'lee-terminal-cwd';
+const HISTORY_CAP = 500;
 
 export const THEMES: Record<string, Theme> = {
   matrix: {
@@ -133,6 +138,7 @@ export const THEMES: Record<string, Theme> = {
 };
 
 export type DispatchHandler = (line: string, signal: AbortSignal) => Promise<void>;
+export type PromptBuilder = (cwd: string) => string;
 
 export class TerminalUI {
   private term: XTerm;
@@ -145,6 +151,7 @@ export class TerminalUI {
   private currentAbort: AbortController | null = null;
   private busy = false;
   private prompt = '';
+  private promptBuilder: PromptBuilder = () => '$ ';
   private dispatch: DispatchHandler = async () => {};
   private currentTheme = 'matrix';
   private statusLeft: HTMLElement | null = null;
@@ -152,6 +159,12 @@ export class TerminalUI {
   private agentLabel = '';
   private modalResolve: ((index: number) => void) | null = null;
   private modalCount = 0;
+  private cwd: string = HOME;
+  readonly fs: VirtualFs = new VirtualFs();
+  // Reverse-search state (Ctrl-R)
+  private searching = false;
+  private searchQuery = '';
+  private searchResult = '';
 
   constructor(container: HTMLElement) {
     this.term = new XTerm({
@@ -176,7 +189,6 @@ export class TerminalUI {
 
     this.term.onData(data => this.onData(data));
     this.term.onKey(({ domEvent }) => {
-      // Ctrl+C / Ctrl+L are handled in onData via ETX/FF — keep this hook for paste/focus.
       if (domEvent.key === 'Tab') domEvent.preventDefault();
     });
 
@@ -184,7 +196,35 @@ export class TerminalUI {
 
     this.statusLeft = document.getElementById('status-left');
     this.statusRight = document.getElementById('status-right');
+
+    this.loadPersisted();
     this.updateStatus();
+  }
+
+  private loadPersisted() {
+    try {
+      const h = localStorage.getItem(HISTORY_KEY);
+      if (h) {
+        const parsed = JSON.parse(h);
+        if (Array.isArray(parsed)) this.history = parsed.filter((x: unknown) => typeof x === 'string').slice(-HISTORY_CAP);
+      }
+      const cwd = localStorage.getItem(CWD_KEY);
+      if (cwd && this.fs.get(cwd)?.type === 'dir') {
+        this.cwd = cwd;
+      }
+    } catch { /* ignore */ }
+  }
+
+  private persistHistory() {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(this.history.slice(-HISTORY_CAP)));
+    } catch { /* ignore */ }
+  }
+
+  private persistCwd() {
+    try {
+      localStorage.setItem(CWD_KEY, this.cwd);
+    } catch { /* ignore */ }
   }
 
   focus() {
@@ -195,8 +235,9 @@ export class TerminalUI {
     this.dispatch = d;
   }
 
-  setPrompt(p: string) {
-    this.prompt = p;
+  setPromptBuilder(fn: PromptBuilder) {
+    this.promptBuilder = fn;
+    this.prompt = this.promptBuilder(this.cwd);
   }
 
   setAgentLabel(label: string) {
@@ -219,8 +260,19 @@ export class TerminalUI {
     return Object.keys(THEMES);
   }
 
+  getCwd(): string {
+    return this.cwd;
+  }
+
+  setCwd(p: string): void {
+    const node = this.fs.get(p);
+    if (!node || node.type !== 'dir') return;
+    this.cwd = p;
+    this.prompt = this.promptBuilder(p);
+    this.persistCwd();
+  }
+
   print(line: string) {
-    // Each call ends with newline. Lines can already contain CRLF for multi-line strings.
     this.term.write(line.replace(/\r?\n/g, '\r\n') + '\r\n');
   }
 
@@ -242,6 +294,12 @@ export class TerminalUI {
     return this.history.slice();
   }
 
+  clearHistory(): void {
+    this.history = [];
+    try { localStorage.removeItem(HISTORY_KEY); } catch { /* ignore */ }
+    this.updateStatus();
+  }
+
   // Programmatically run a command as if the user typed it.
   async typeAndRun(line: string) {
     if (this.busy) return;
@@ -250,11 +308,12 @@ export class TerminalUI {
   }
 
   async runSilent(line: string): Promise<string> {
-    // Run a command but capture its output instead of writing it to the terminal.
-    // Used by the AI agent so the human-visible output is decoupled from the
-    // raw text the model consumes.
+    // Run a full pipeline but capture its output instead of writing it to the
+    // terminal. Used by the AI agent so the human-visible output is decoupled
+    // from the raw text the model consumes.
     const collected: string[] = [];
-    const ctxOverride = {
+    const ac = new AbortController();
+    await runPipeline(line, {
       print: (l: string) => collected.push(l),
       printRaw: (t: string) => collected.push(t),
       clear: () => {},
@@ -262,15 +321,17 @@ export class TerminalUI {
       getHistory: () => this.history.slice(),
       setTheme: (name: string) => this.setTheme(name),
       listThemes: () => this.listThemes(),
-    };
-    const ac = new AbortController();
-    await runCommand(line, { ...ctxOverride, signal: ac.signal });
+      cwd: this.cwd,
+      setCwd: (p: string) => this.setCwd(p),
+      fs: this.fs,
+      signal: ac.signal,
+    });
     return collected.map(stripAnsi).join('\n').trim();
   }
 
   private updateStatus() {
     if (this.statusLeft) {
-      this.statusLeft.textContent = `theme: ${this.currentTheme}  •  ${this.history.length} cmds`;
+      this.statusLeft.textContent = `${this.currentTheme}  ·  cwd: ${abbreviateCwd(this.cwd)}  ·  ${this.history.length} cmds`;
     }
     if (this.statusRight) {
       this.statusRight.textContent = this.agentLabel || 'classic mode';
@@ -309,46 +370,27 @@ export class TerminalUI {
       return;
     }
 
+    // Reverse-search mode (Ctrl-R) consumes data with its own rules.
+    if (this.searching) {
+      for (let i = 0; i < data.length; i++) {
+        await this.handleSearchKey(data, i);
+        if (!this.searching) break;
+      }
+      return;
+    }
+
     for (let i = 0; i < data.length; ) {
       const code = data.charCodeAt(i);
 
       if (data[i] === '\x1b') {
-        // Escape sequence — e.g. arrow keys
         if (data[i + 1] === '[') {
           const next = data[i + 2];
-          if (next === 'A') {
-            this.historyUp();
-            i += 3;
-            continue;
-          }
-          if (next === 'B') {
-            this.historyDown();
-            i += 3;
-            continue;
-          }
-          if (next === 'C') {
-            this.moveCursor(1);
-            i += 3;
-            continue;
-          }
-          if (next === 'D') {
-            this.moveCursor(-1);
-            i += 3;
-            continue;
-          }
-          if (next === 'H') {
-            // Home
-            this.moveCursorAbs(0);
-            i += 3;
-            continue;
-          }
-          if (next === 'F') {
-            // End
-            this.moveCursorAbs(this.buffer.length);
-            i += 3;
-            continue;
-          }
-          // Unknown escape — skip
+          if (next === 'A') { this.historyUp(); i += 3; continue; }
+          if (next === 'B') { this.historyDown(); i += 3; continue; }
+          if (next === 'C') { this.moveCursor(1); i += 3; continue; }
+          if (next === 'D') { this.moveCursor(-1); i += 3; continue; }
+          if (next === 'H') { this.moveCursorAbs(0); i += 3; continue; }
+          if (next === 'F') { this.moveCursorAbs(this.buffer.length); i += 3; continue; }
           i += 3;
           continue;
         }
@@ -357,7 +399,6 @@ export class TerminalUI {
       }
 
       if (code === 0x03) {
-        // Ctrl+C
         this.term.write('^C\r\n');
         this.buffer = '';
         this.cursor = 0;
@@ -375,38 +416,22 @@ export class TerminalUI {
         i++;
         continue;
       }
+      if (code === 0x12) {
+        // Ctrl-R — reverse history search
+        this.beginSearch();
+        i++;
+        continue;
+      }
       if (code === 0x15) {
-        // Ctrl+U — clear current line
         this.redrawBuffer('');
         i++;
         continue;
       }
-      if (code === 0x01) {
-        // Ctrl+A — beginning of line
-        this.moveCursorAbs(0);
-        i++;
-        continue;
-      }
-      if (code === 0x05) {
-        // Ctrl+E — end of line
-        this.moveCursorAbs(this.buffer.length);
-        i++;
-        continue;
-      }
-      if (code === 0x17) {
-        // Ctrl+W — delete previous word
-        this.deleteWord();
-        i++;
-        continue;
-      }
-      if (code === 0x7f || code === 0x08) {
-        // Backspace
-        this.backspace();
-        i++;
-        continue;
-      }
+      if (code === 0x01) { this.moveCursorAbs(0); i++; continue; }
+      if (code === 0x05) { this.moveCursorAbs(this.buffer.length); i++; continue; }
+      if (code === 0x17) { this.deleteWord(); i++; continue; }
+      if (code === 0x7f || code === 0x08) { this.backspace(); i++; continue; }
       if (code === 0x0d || code === 0x0a) {
-        // Enter
         const line = this.buffer;
         this.term.write('\r\n');
         this.buffer = '';
@@ -417,18 +442,12 @@ export class TerminalUI {
         continue;
       }
       if (code === 0x09) {
-        // Tab — simple completion against command names
         this.tabComplete();
         i++;
         continue;
       }
-      if (code < 0x20) {
-        // Other control chars — ignore
-        i++;
-        continue;
-      }
+      if (code < 0x20) { i++; continue; }
 
-      // Insert printable
       this.insert(data[i]);
       i++;
     }
@@ -467,7 +486,6 @@ export class TerminalUI {
     if (this.cursor === 0) return;
     this.buffer = this.buffer.slice(0, this.cursor - 1) + this.buffer.slice(this.cursor);
     this.cursor--;
-    // Move left, write rest + space to overwrite tail, then move back
     const rest = this.buffer.slice(this.cursor);
     this.term.write(`\x1b[D${rest} `);
     this.term.write(`\x1b[${rest.length + 1}D`);
@@ -476,11 +494,8 @@ export class TerminalUI {
   private moveCursor(delta: number) {
     const next = Math.max(0, Math.min(this.buffer.length, this.cursor + delta));
     if (next === this.cursor) return;
-    if (next > this.cursor) {
-      this.term.write(`\x1b[${next - this.cursor}C`);
-    } else {
-      this.term.write(`\x1b[${this.cursor - next}D`);
-    }
+    if (next > this.cursor) this.term.write(`\x1b[${next - this.cursor}C`);
+    else this.term.write(`\x1b[${this.cursor - next}D`);
     this.cursor = next;
   }
 
@@ -489,10 +504,7 @@ export class TerminalUI {
   }
 
   private redrawBuffer(newBuffer: string) {
-    // Erase current line content after prompt and rewrite buffer.
-    // Move cursor to start of buffer
     if (this.cursor > 0) this.term.write(`\x1b[${this.cursor}D`);
-    // Clear from cursor to end of line
     this.term.write('\x1b[K');
     this.buffer = newBuffer;
     this.cursor = newBuffer.length;
@@ -523,22 +535,145 @@ export class TerminalUI {
   }
 
   private tabComplete() {
-    if (!this.buffer.trim()) return;
     const parts = this.buffer.split(/\s+/);
-    if (parts.length !== 1) return; // only complete first word for now
-    const prefix = parts[0];
-    const names = listCommandNames();
-    const matches = names.filter(n => n.startsWith(prefix));
-    if (matches.length === 0) return;
-    if (matches.length === 1) {
-      this.redrawBuffer(matches[0] + ' ');
+    // First word — complete against command names.
+    if (parts.length <= 1) {
+      const prefix = parts[0] ?? '';
+      const names = listCommandNames();
+      const matches = names.filter(n => n.startsWith(prefix));
+      this.applyCompletion(matches);
       return;
     }
-    // Multiple matches — show them and reprint prompt + buffer
+    // Subsequent words — complete against the virtual filesystem.
+    const last = parts[parts.length - 1];
+    const candidates = this.fs.complete(this.cwd, last);
+    // Convert absolute paths back into the prefix the user is typing.
+    // We want to replace the tail of the buffer that is `last` with the matched suffix.
+    const display = candidates.map(abs => {
+      // If the user typed an absolute path, keep it absolute.
+      if (last.startsWith('/') || last.startsWith('~')) {
+        return last.startsWith('~') ? '~' + abs.slice(HOME.length) : abs;
+      }
+      // Otherwise, return the relative suffix.
+      const cwdAbs = this.cwd === '/' ? '' : this.cwd;
+      if (abs.startsWith(cwdAbs + '/')) return abs.slice(cwdAbs.length + 1);
+      return abs;
+    });
+    this.applyCompletion(display);
+  }
+
+  private applyCompletion(matches: string[]) {
+    if (matches.length === 0) return;
+    const parts = this.buffer.split(/(\s+)/); // keep spaces
+    if (matches.length === 1) {
+      // Replace last non-space token
+      let i = parts.length - 1;
+      while (i >= 0 && /^\s+$/.test(parts[i])) i--;
+      if (i < 0) return;
+      const completion = matches[0];
+      const isDir = completion.endsWith('/');
+      parts[i] = completion + (isDir ? '' : ' ');
+      this.redrawBuffer(parts.join(''));
+      return;
+    }
+    // Common prefix among matches — extend up to it.
+    const commonPrefix = longestCommonPrefix(matches);
+    let i = parts.length - 1;
+    while (i >= 0 && /^\s+$/.test(parts[i])) i--;
+    if (i >= 0 && commonPrefix.length > parts[i].length) {
+      parts[i] = commonPrefix;
+      this.redrawBuffer(parts.join(''));
+    }
     this.term.write('\r\n');
     this.term.write(matches.map(m => `${c.brightCyan}${m}${R}`).join('  '));
     this.term.write('\r\n');
     this.term.write(this.prompt + this.buffer);
+    const back = this.buffer.length - this.cursor;
+    if (back > 0) this.term.write(`\x1b[${back}D`);
+  }
+
+  // ---- reverse search ----
+
+  private beginSearch() {
+    this.searching = true;
+    this.searchQuery = '';
+    this.searchResult = '';
+    this.redrawSearchLine();
+  }
+
+  private async handleSearchKey(data: string, i: number) {
+    const code = data.charCodeAt(i);
+    if (code === 0x0d || code === 0x0a) {
+      // Accept — exit search, place result in buffer
+      this.finishSearch(true);
+      return;
+    }
+    if (code === 0x03 || code === 0x07) {
+      // Ctrl-C or Ctrl-G: cancel
+      this.finishSearch(false);
+      return;
+    }
+    if (code === 0x12) {
+      // Ctrl-R again — find next earlier match
+      this.findNextSearch();
+      return;
+    }
+    if (code === 0x7f || code === 0x08) {
+      this.searchQuery = this.searchQuery.slice(0, -1);
+      this.updateSearchResult();
+      this.redrawSearchLine();
+      return;
+    }
+    if (code < 0x20) return;
+    this.searchQuery += data[i];
+    this.updateSearchResult();
+    this.redrawSearchLine();
+  }
+
+  private updateSearchResult() {
+    if (!this.searchQuery) {
+      this.searchResult = '';
+      return;
+    }
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      if (this.history[i].includes(this.searchQuery)) {
+        this.searchResult = this.history[i];
+        return;
+      }
+    }
+    this.searchResult = '';
+  }
+
+  private findNextSearch() {
+    if (!this.searchResult || !this.searchQuery) return;
+    const idx = this.history.lastIndexOf(this.searchResult);
+    for (let i = idx - 1; i >= 0; i--) {
+      if (this.history[i].includes(this.searchQuery)) {
+        this.searchResult = this.history[i];
+        this.redrawSearchLine();
+        return;
+      }
+    }
+  }
+
+  private redrawSearchLine() {
+    // Erase current line and reprint search prompt + result
+    this.term.write('\r\x1b[K');
+    const prefix = `${c.brightMagenta}(reverse-i-search)\`${R}${this.searchQuery}${c.brightMagenta}':${R} `;
+    this.term.write(prefix + this.searchResult);
+  }
+
+  private finishSearch(accept: boolean) {
+    this.searching = false;
+    // Clear the search line
+    this.term.write('\r\x1b[K');
+    // Redraw prompt + buffer (or search result if accepted)
+    const newBuffer = accept ? this.searchResult || this.buffer : this.buffer;
+    this.buffer = newBuffer;
+    this.cursor = newBuffer.length;
+    this.term.write(this.prompt + this.buffer);
+    this.searchQuery = '';
+    this.searchResult = '';
   }
 
   private async handleSubmit(line: string) {
@@ -549,6 +684,8 @@ export class TerminalUI {
     }
     if (this.history[this.history.length - 1] !== trimmed) {
       this.history.push(trimmed);
+      if (this.history.length > HISTORY_CAP) this.history.shift();
+      this.persistHistory();
     }
     this.updateStatus();
     this.busy = true;
@@ -558,6 +695,7 @@ export class TerminalUI {
     } finally {
       this.busy = false;
       this.currentAbort = null;
+      this.updateStatus();
       this.showPrompt();
     }
   }
@@ -578,14 +716,10 @@ export class TerminalUI {
     this.print(`${ansi.dim}${text}${R}`);
   }
 
-  // TUI modal: draws a centered-ish bordered box with a title and a numbered
-  // list of options. Resolves with the chosen index (0-based) when the user
-  // presses the matching number key — that keypress is the user gesture that
-  // browsers require for triggering an on-device model download.
   async chooseModal(title: string, body: string[], options: string[]): Promise<number> {
     const width = Math.min(64, Math.max(40, this.term.cols - 4));
     const horiz = '─'.repeat(width - 2);
-    const inner = width - 4; // borders + 1-space gutter on each side
+    const inner = width - 4;
     const pad = (s: string) => {
       const visible = stripAnsi(s);
       const space = Math.max(0, inner - visible.length);
@@ -618,5 +752,24 @@ export class TerminalUI {
 }
 
 function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+}
+
+function longestCommonPrefix(strs: string[]): string {
+  if (strs.length === 0) return '';
+  let prefix = strs[0];
+  for (const s of strs) {
+    while (!s.startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+      if (!prefix) return '';
+    }
+  }
+  return prefix;
+}
+
+function abbreviateCwd(p: string): string {
+  if (p === HOME) return '~';
+  if (p.startsWith(HOME + '/')) return '~' + p.slice(HOME.length);
+  return p;
 }
