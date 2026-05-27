@@ -1,0 +1,90 @@
+@import '@xterm/xterm/css/xterm.css';
+
+:root {
+  --bg: #0a0a0a;
+  --fg: #33ff33;
+  --accent: #00ffff;
+  --dim: #226622;
+  --status-bg: #111111;
+  --status-fg: #888888;
+  --status-accent: #00ffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#terminal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  padding: 12px;
+  background: var(--bg);
+}
+
+#terminal .xterm {
+  height: 100%;
+}
+
+#terminal .xterm-viewport {
+  background-color: var(--bg) !important;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) var(--bg);
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+#terminal .xterm-viewport::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+#terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--dim);
+  border-radius: 4px;
+}
+
+#status-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 22px;
+  background: var(--status-bg);
+  color: var(--status-fg);
+  font-size: 12px;
+  font-family: inherit;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  border-top: 1px solid #1a1a1a;
+  user-select: none;
+}
+
+#status-right {
+  color: var(--status-accent);
+}
+
+@media (max-width: 600px) {
+  #terminal {
+    padding: 8px;
+  }
+  #status-bar {
+    font-size: 10px;
+    padding: 0 8px;
+  }
+}
