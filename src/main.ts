@@ -1,8 +1,9 @@
 import './styles.css';
 import { TerminalUI } from './terminal.js';
-import { runCommand, getCommand } from './commands.js';
+import { runPipeline, getCommand, splitPipes } from './commands.js';
 import { Agent } from './agent.js';
 import { banner, welcome, ansi } from './banner.js';
+import { HOME } from './fs.js';
 
 const c = ansi.fg;
 const R = ansi.reset;
@@ -13,24 +14,45 @@ if (!container) throw new Error('#terminal not found');
 
 const ui = new TerminalUI(container);
 
-const HUMAN_PROMPT = `${c.brightGreen}${B}guest${R}${c.green}@leesalminen${R}:${c.brightCyan}~${R}$ `;
-const AGENT_PROMPT = `${c.brightCyan}${B}✦ ask${R} ${c.brightCyan}›${R} `;
+const HUMAN_PROMPT_FOR = (cwd: string) => {
+  const short = cwd === HOME ? '~' : cwd.startsWith(HOME + '/') ? '~' + cwd.slice(HOME.length) : cwd;
+  return `${c.brightGreen}${B}guest${R}${c.green}@leesalminen${R}:${c.brightCyan}${short}${R}$ `;
+};
+const AGENT_PROMPT_FOR = (_cwd: string) => `${c.brightCyan}${B}✦ ask${R} ${c.brightCyan}›${R} `;
 
 let agent: Agent | null = null;
 let agentReady = false;
+let pendingImage: Blob | null = null;
 
 function setMode() {
   if (agentReady && agent?.isReady()) {
-    ui.setPrompt(AGENT_PROMPT);
+    ui.setPromptBuilder(AGENT_PROMPT_FOR);
     ui.setAgentLabel('✦ ai guide: on   (prefix / to bypass)');
   } else {
-    ui.setPrompt(HUMAN_PROMPT);
+    ui.setPromptBuilder(HUMAN_PROMPT_FOR);
     ui.setAgentLabel('classic mode');
   }
 }
 
+function makeCtx(signal: AbortSignal) {
+  return {
+    print: (l: string) => ui.print(l),
+    printRaw: (t: string) => ui.printRaw(t),
+    clear: () => ui.clear(),
+    run: async (cmd: string) => {
+      await runPipeline(cmd, makeCtx(signal));
+    },
+    getHistory: () => ui.getHistory(),
+    setTheme: (n: string) => ui.setTheme(n),
+    listThemes: () => ui.listThemes(),
+    cwd: ui.getCwd(),
+    setCwd: (p: string) => ui.setCwd(p),
+    fs: ui.fs,
+    signal,
+  };
+}
+
 async function dispatch(line: string, signal: AbortSignal): Promise<void> {
-  // Allow user to bypass the agent with leading "/" — runs the command directly.
   let trimmed = line.trim();
   let bypass = false;
   if (trimmed.startsWith('/')) {
@@ -39,47 +61,36 @@ async function dispatch(line: string, signal: AbortSignal): Promise<void> {
     if (!trimmed) return;
   }
 
-  // Built-in toggle.
-  if (trimmed === 'ai' || trimmed === 'ai on' || trimmed === 'ai off') {
-    handleAiToggle(trimmed);
+  // Built-in toggles and helpers.
+  if (trimmed === 'ai' || trimmed.startsWith('ai ')) {
+    handleAiToggle(trimmed, signal);
     return;
   }
 
-  const head = trimmed.split(/\s+/)[0];
-
-  // If the agent is active and not bypassed, only treat as a command if it
-  // matches a real command name AND the line looks like a command (no spaces
-  // beyond args, all lowercase head). Otherwise hand the line to the agent.
-  const isKnownCommand = !!getCommand(head);
+  const segments = splitPipes(trimmed);
+  const firstHead = segments[0]?.split(/\s+/)[0] ?? '';
+  const isKnownCommand = !!getCommand(firstHead);
   const useAgent = agentReady && agent?.isReady() && !bypass && !isKnownCommand;
+
+  // If there's a pending image, prefer routing to the agent. Discard with a
+  // notice if the user ran a command instead.
+  if (pendingImage) {
+    if (useAgent && agent) {
+      const img = pendingImage;
+      pendingImage = null;
+      await agent.ask(trimmed || 'What do you see in this image?', signal, img);
+      return;
+    }
+    ui.printSystem(`✦ image discarded (you ran a command instead).`);
+    pendingImage = null;
+  }
 
   if (useAgent) {
     await agent!.ask(trimmed, signal);
     return;
   }
 
-  // Run as a direct command.
-  await runCommand(trimmed, {
-    print: l => ui.print(l),
-    printRaw: t => ui.printRaw(t),
-    clear: () => ui.clear(),
-    run: async (cmd: string) => {
-      await runCommand(cmd, {
-        print: l => ui.print(l),
-        printRaw: t => ui.printRaw(t),
-        clear: () => ui.clear(),
-        run: async () => {},
-        getHistory: () => ui.getHistory(),
-        setTheme: (n: string) => ui.setTheme(n),
-        listThemes: () => ui.listThemes(),
-        signal,
-      });
-    },
-    getHistory: () => ui.getHistory(),
-    setTheme: (n: string) => ui.setTheme(n),
-    listThemes: () => ui.listThemes(),
-    signal,
-  });
+  await runPipeline(trimmed, makeCtx(signal));
 }
 
 async function enableAgent() {
@@ -103,32 +114,94 @@ async function enableAgent() {
   setMode();
 }
 
-function handleAiToggle(line: string) {
+function handleAiToggle(line: string, signal: AbortSignal) {
   if (!agent) {
     ui.print(`${c.red}AI guide is not available in this browser.${R}`);
     ui.printSystem(`Chrome with the Prompt API (window.LanguageModel) is required.`);
     return;
   }
-  if (line === 'ai off') {
+  const parts = line.split(/\s+/);
+  const sub = parts[1] ?? '';
+
+  if (sub === 'off') {
     if (agent.isReady()) agent.toggle();
     agentReady = false;
     ui.print(`${c.green}✓ AI guide disabled — classic terminal mode.${R}`);
     setMode();
     return;
   }
-  if (line === 'ai on') {
+  if (sub === 'on' || sub === '') {
+    if (sub === '' && agent.getStatus() === 'ready') {
+      const enabledNow = agent.toggle();
+      agentReady = enabledNow && agent.getStatus() === 'ready';
+      ui.print(enabledNow ? `${c.brightCyan}✦ AI guide enabled.${R}` : `${c.green}✓ AI guide disabled.${R}`);
+      setMode();
+      return;
+    }
     void enableAgent();
     return;
   }
-  // bare 'ai' — toggle. If model isn't loaded yet, treat as enable.
-  if (agent.getStatus() !== 'ready') {
-    void enableAgent();
+  if (sub === 'voice') {
+    if (agent.isVoiceActive()) {
+      agent.stopVoiceMode();
+    } else if (!agent.isReady()) {
+      void (async () => {
+        await enableAgent();
+        if (agent!.isReady()) await agent!.startVoiceMode();
+      })();
+    } else {
+      void agent.startVoiceMode();
+    }
+    void signal;
     return;
   }
-  const enabledNow = agent.toggle();
-  agentReady = enabledNow && agent.getStatus() === 'ready';
-  ui.print(enabledNow ? `${c.brightCyan}✦ AI guide enabled.${R}` : `${c.green}✓ AI guide disabled.${R}`);
-  setMode();
+  if (sub === 'forget') {
+    agent.forgetMemory();
+    ui.print(`${c.green}✓ agent memory cleared.${R}`);
+    return;
+  }
+  ui.print(`${c.red}unknown: ai ${sub}${R}  ${ansi.dim}(try: ai on | ai off | ai voice | ai forget)${R}`);
+}
+
+function setupImagePaste() {
+  // Listen on the document so it works whether the terminal has focus or not.
+  document.addEventListener('paste', (ev: ClipboardEvent) => {
+    const items = ev.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        pendingImage = blob;
+        ui.printSystem(`✦ image attached (${blob.type}, ${(blob.size / 1024).toFixed(0)} KB). Type a question, then Enter.`);
+        ev.preventDefault();
+        return;
+      }
+    }
+  });
+
+  // Also accept drag-and-drop into the terminal.
+  container?.addEventListener('dragover', e => e.preventDefault());
+  container?.addEventListener('drop', (ev: DragEvent) => {
+    ev.preventDefault();
+    const file = ev.dataTransfer?.files?.[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    pendingImage = file;
+    ui.printSystem(`✦ image attached (${file.type}, ${(file.size / 1024).toFixed(0)} KB). Type a question, then Enter.`);
+  });
+}
+
+async function runDeepLink() {
+  // Supports #cmd=<line>  or  #run=<demo-path>.
+  const hash = location.hash.replace(/^#/, '');
+  if (!hash) return;
+  const params = new URLSearchParams(hash);
+  const cmd = params.get('cmd');
+  const run = params.get('run');
+  const line = cmd || (run ? `run ${run}` : '');
+  if (!line) return;
+  ui.printSystem(`✦ deep link → ${line}`);
+  await ui.typeAndRun(line);
 }
 
 async function boot() {
@@ -139,8 +212,6 @@ async function boot() {
   const result = await agent.init();
   let status = result.status;
 
-  // If the model needs to download, browsers require a user gesture for
-  // LanguageModel.create() — show a TUI prompt and let the keypress trigger it.
   if (status === 'downloadable' || status === 'downloading') {
     const choice = await ui.chooseModal(
       `✦  fancy a chat with Lee's agent?`,
@@ -173,14 +244,15 @@ async function boot() {
 
   setMode();
   ui.setDispatch(dispatch);
+  setupImagePaste();
 
-  if (agentReady) {
+  if (location.hash) {
+    await runDeepLink();
+  } else if (agentReady) {
     ui.print(`${B}${c.brightCyan}✦${R} ${ansi.dim}warming up...${R}`);
     await agent!.ask('Greet the visitor with a short welcome and a quick intro to Lee.', new AbortController().signal);
-    ui.showPrompt();
-  } else {
-    ui.showPrompt();
   }
+  ui.showPrompt();
 }
 
 boot().catch(err => {
