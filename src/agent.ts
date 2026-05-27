@@ -102,6 +102,9 @@ export class Agent {
     return this.status;
   }
 
+  // Probe availability without creating a session. Creating a session when the
+  // model needs to be downloaded requires a transient user activation, so we
+  // defer create() until a real keypress fires it via load().
   async init(): Promise<AgentInitResult> {
     if (typeof window === 'undefined' || typeof window.LanguageModel === 'undefined') {
       this.status = 'unsupported';
@@ -113,30 +116,49 @@ export class Agent {
         this.status = 'unavailable';
         return { status: 'unavailable' };
       }
-
-      if (availability === 'downloadable' || availability === 'downloading') {
-        this.status = availability;
-        this.ui.printSystem(`Downloading on-device model... this happens once.`);
-        this.session = await window.LanguageModel.create({
-          initialPrompts: [{ role: 'system', content: buildSystemPrompt() }],
-          temperature: 0.6,
-          topK: 3,
-          monitor: (m) => {
-            m.addEventListener('downloadprogress', ((ev: Event) => {
-              const e = ev as Event & { loaded: number };
-              const pct = Math.round((e.loaded ?? 0) * 100);
-              this.ui.printSystem(`  model download: ${pct}%`);
-            }) as EventListener);
-          },
-        });
-      } else {
+      if (availability === 'available') {
+        this.status = 'ready';
+        // Model is on-disk — safe to create eagerly, no gesture needed.
         this.session = await window.LanguageModel.create({
           initialPrompts: [{ role: 'system', content: buildSystemPrompt() }],
           temperature: 0.6,
           topK: 3,
         });
+        return { status: 'ready' };
       }
+      // 'downloadable' | 'downloading' — defer create to a user gesture.
+      this.status = availability;
+      return { status: availability };
+    } catch (err) {
+      this.status = 'unavailable';
+      return { status: 'unavailable', message: (err as Error).message };
+    }
+  }
 
+  // Must be called from a user-gesture handler (click/keypress) when the
+  // model still needs to be downloaded. Returns true on success.
+  async load(): Promise<AgentInitResult> {
+    if (typeof window === 'undefined' || typeof window.LanguageModel === 'undefined') {
+      this.status = 'unsupported';
+      return { status: 'unsupported' };
+    }
+    if (this.session) {
+      this.status = 'ready';
+      return { status: 'ready' };
+    }
+    try {
+      this.session = await window.LanguageModel.create({
+        initialPrompts: [{ role: 'system', content: buildSystemPrompt() }],
+        temperature: 0.6,
+        topK: 3,
+        monitor: (m) => {
+          m.addEventListener('downloadprogress', ((ev: Event) => {
+            const e = ev as Event & { loaded: number };
+            const pct = Math.round((e.loaded ?? 0) * 100);
+            this.ui.printSystem(`  model download: ${pct}%`);
+          }) as EventListener);
+        },
+      });
       this.status = 'ready';
       return { status: 'ready' };
     } catch (err) {

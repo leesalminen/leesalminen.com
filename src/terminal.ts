@@ -150,6 +150,8 @@ export class TerminalUI {
   private statusLeft: HTMLElement | null = null;
   private statusRight: HTMLElement | null = null;
   private agentLabel = '';
+  private modalResolve: ((index: number) => void) | null = null;
+  private modalCount = 0;
 
   constructor(container: HTMLElement) {
     this.term = new XTerm({
@@ -276,6 +278,29 @@ export class TerminalUI {
   }
 
   private async onData(data: string) {
+    // Modal mode — capture a single digit (1..N) or Ctrl+C and resolve.
+    if (this.modalResolve) {
+      if (data === '\x03') {
+        const r = this.modalResolve;
+        this.modalResolve = null;
+        r(-1);
+        return;
+      }
+      for (const ch of data) {
+        const code = ch.charCodeAt(0);
+        if (code >= 0x31 && code <= 0x39) {
+          const idx = code - 0x31;
+          if (idx < this.modalCount) {
+            const r = this.modalResolve;
+            this.modalResolve = null;
+            r(idx);
+            return;
+          }
+        }
+      }
+      return;
+    }
+
     // If a command is running, only handle Ctrl+C.
     if (this.busy) {
       if (data === '\x03') {
@@ -551,6 +576,44 @@ export class TerminalUI {
 
   printSystem(text: string) {
     this.print(`${ansi.dim}${text}${R}`);
+  }
+
+  // TUI modal: draws a centered-ish bordered box with a title and a numbered
+  // list of options. Resolves with the chosen index (0-based) when the user
+  // presses the matching number key — that keypress is the user gesture that
+  // browsers require for triggering an on-device model download.
+  async chooseModal(title: string, body: string[], options: string[]): Promise<number> {
+    const width = Math.min(64, Math.max(40, this.term.cols - 4));
+    const horiz = '─'.repeat(width - 2);
+    const inner = width - 4; // borders + 1-space gutter on each side
+    const pad = (s: string) => {
+      const visible = stripAnsi(s);
+      const space = Math.max(0, inner - visible.length);
+      return `│ ${s}${' '.repeat(space)} │`;
+    };
+    const blank = `│${' '.repeat(width - 2)}│`;
+
+    this.print('');
+    this.print(`${c.brightCyan}╭${horiz}╮${R}`);
+    this.print(`${c.brightCyan}${pad(`${B}${title}${R}${c.brightCyan}`)}${R}`);
+    this.print(`${c.brightCyan}├${horiz}┤${R}`);
+    for (const line of body) {
+      this.print(`${c.brightCyan}${pad(`${ansi.dim}${line}${R}${c.brightCyan}`)}${R}`);
+    }
+    this.print(`${c.brightCyan}${blank}${R}`);
+    options.forEach((opt, i) => {
+      const num = `${c.brightYellow}${B}[${i + 1}]${R}`;
+      this.print(`${c.brightCyan}${pad(`  ${num} ${opt}${c.brightCyan}`)}${R}`);
+    });
+    this.print(`${c.brightCyan}${blank}${R}`);
+    this.print(`${c.brightCyan}${pad(`${ansi.dim}press 1–${options.length} to choose${R}${c.brightCyan}`)}${R}`);
+    this.print(`${c.brightCyan}╰${horiz}╯${R}`);
+    this.print('');
+
+    this.modalCount = options.length;
+    return new Promise(resolve => {
+      this.modalResolve = resolve;
+    });
   }
 }
 

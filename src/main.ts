@@ -82,6 +82,27 @@ async function dispatch(line: string, signal: AbortSignal): Promise<void> {
   });
 }
 
+async function enableAgent() {
+  if (!agent) return;
+  const s = agent.getStatus();
+  if (s === 'unsupported' || s === 'unavailable') {
+    ui.print(`${c.red}AI guide unavailable in this browser.${R}`);
+    return;
+  }
+  if (s !== 'ready') {
+    ui.printSystem(`Loading on-device model…`);
+    const r = await agent.load();
+    if (r.status !== 'ready') {
+      ui.print(`${c.red}Could not load model: ${r.message ?? r.status}${R}`);
+      return;
+    }
+  }
+  if (!agent.isReady()) agent.toggle();
+  agentReady = true;
+  ui.print(`${c.brightCyan}✦ AI guide enabled.${R}`);
+  setMode();
+}
+
 function handleAiToggle(line: string) {
   if (!agent) {
     ui.print(`${c.red}AI guide is not available in this browser.${R}`);
@@ -96,17 +117,14 @@ function handleAiToggle(line: string) {
     return;
   }
   if (line === 'ai on') {
-    if (agent.getStatus() !== 'ready') {
-      ui.print(`${c.red}AI guide not ready: ${agent.getStatus()}${R}`);
-      return;
-    }
-    if (!agent.isReady()) agent.toggle();
-    agentReady = true;
-    ui.print(`${c.brightCyan}✦ AI guide enabled.${R}`);
-    setMode();
+    void enableAgent();
     return;
   }
-  // bare 'ai' — toggle
+  // bare 'ai' — toggle. If model isn't loaded yet, treat as enable.
+  if (agent.getStatus() !== 'ready') {
+    void enableAgent();
+    return;
+  }
   const enabledNow = agent.toggle();
   agentReady = enabledNow && agent.getStatus() === 'ready';
   ui.print(enabledNow ? `${c.brightCyan}✦ AI guide enabled.${R}` : `${c.green}✓ AI guide disabled.${R}`);
@@ -117,26 +135,46 @@ async function boot() {
   ui.focus();
   ui.print(banner());
 
-  // Try to bring up the on-device agent.
   agent = new Agent(ui);
   const result = await agent.init();
-  agentReady = result.status === 'ready';
+  let status = result.status;
 
-  ui.print(welcome(agentReady));
-  ui.print('');
-
-  if (result.status === 'downloadable' || result.status === 'downloading') {
-    ui.printSystem(`(model finished downloading — agent ready)`);
-  }
-  if (result.status === 'unavailable' && result.message) {
+  // If the model needs to download, browsers require a user gesture for
+  // LanguageModel.create() — show a TUI prompt and let the keypress trigger it.
+  if (status === 'downloadable' || status === 'downloading') {
+    const choice = await ui.chooseModal(
+      `✦  fancy a chat with Lee's agent?`,
+      [
+        `Lee cloned a small piece of his brain and stuffed it into`,
+        `your browser. It knows his work, runs the terminal for you,`,
+        `and never phones home — everything runs on-device.`,
+        `One-time ~2 GB download. Or just poke around yourself.`,
+      ],
+      [
+        `Sure, let the little guy out of the box`,
+        `Nah, I'll drive — hands off my terminal`,
+      ],
+    );
+    if (choice === 0) {
+      ui.printSystem(`Loading on-device model…`);
+      const loaded = await agent.load();
+      status = loaded.status;
+      if (loaded.status !== 'ready' && loaded.message) {
+        ui.printSystem(`agent unavailable: ${loaded.message}`);
+      }
+    }
+  } else if (status === 'unavailable' && result.message) {
     ui.printSystem(`agent unavailable: ${result.message}`);
   }
+
+  agentReady = status === 'ready';
+  ui.print(welcome(agentReady));
+  ui.print('');
 
   setMode();
   ui.setDispatch(dispatch);
 
   if (agentReady) {
-    // Let the agent introduce itself before the user types anything.
     ui.print(`${B}${c.brightCyan}✦${R} ${ansi.dim}warming up...${R}`);
     await agent!.ask('Greet the visitor with a short welcome and a quick intro to Lee.', new AbortController().signal);
     ui.showPrompt();
