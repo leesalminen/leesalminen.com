@@ -33,7 +33,12 @@ export async function run(ctx: CommandContext): Promise<void> {
   }
 
   const [name, host] = LIGHTNING_ADDRESS.split('@');
-  const lnurlpUrl = `https://${host}/.well-known/lnurlp/${name}`;
+  // pay.bitcoinjungle.app doesn't send CORS headers, so we go through a
+  // same-origin proxy (configured in netlify.toml and vite.config.ts).
+  const lnurlpUrl =
+    host === 'pay.bitcoinjungle.app'
+      ? `/_bj/.well-known/lnurlp/${name}`
+      : `https://${host}/.well-known/lnurlp/${name}`;
 
   ctx.print('');
   ctx.print(`${B}${c.brightCyan}Lightning Tip Jar${R}`);
@@ -57,9 +62,14 @@ export async function run(ctx: CommandContext): Promise<void> {
     return;
   }
 
-  // Step 2: request an invoice via the callback.
-  const sep = params.callback.includes('?') ? '&' : '?';
-  const callbackUrl = `${params.callback}${sep}amount=${msats}`;
+  // Step 2: request an invoice via the callback. Route through the same
+  // proxy so the browser doesn't hit a CORS wall.
+  const proxiedCallback = params.callback.replace(
+    'https://pay.bitcoinjungle.app',
+    '/_bj',
+  );
+  const sep = proxiedCallback.includes('?') ? '&' : '?';
+  const callbackUrl = `${proxiedCallback}${sep}amount=${msats}`;
   const invoice = await withSpinner(ctx, 'minting BOLT11 invoice…', async () => {
     const res = await abortableFetch(callbackUrl, ctx.signal);
     if (!res.ok) throw new Error(`callback returned HTTP ${res.status}`);
@@ -69,18 +79,14 @@ export async function run(ctx: CommandContext): Promise<void> {
   });
   checkAborted(ctx.signal);
 
-  // Step 3: render as a QR code with background blocks. `small: true` uses
-  // half-blocks so the QR fits in fewer rows.
-  const qr = await QRCode.toString(invoice.toUpperCase(), {
-    type: 'terminal',
-    small: true,
-    errorCorrectionLevel: 'L',
-  });
+  // Step 3: render as a QR code using half-block characters. The qrcode
+  // library's browser build strips the terminal renderer, so we get the raw
+  // matrix and render it ourselves — two rows per line via ▀/▄/█.
+  const qr = renderQrHalfBlocks(invoice.toUpperCase());
 
   ctx.print(`${c.green}✓${R} invoice ready — scan to pay from any Lightning wallet:`);
   ctx.print('');
-  // QRCode terminal output already includes its own line breaks.
-  ctx.printRaw(qr.replace(/\n/g, '\r\n'));
+  for (const line of qr) ctx.print(line);
   ctx.print('');
   ctx.print(`${D}BOLT11:${R}`);
   // Wrap long invoice across the terminal nicely.
@@ -95,4 +101,43 @@ function wrap(s: string, width: number): string[] {
   const lines: string[] = [];
   for (let i = 0; i < s.length; i += width) lines.push(s.slice(i, i + width));
   return lines;
+}
+
+// Render `data` as a QR code using ANSI half-blocks on a forced white
+// background. Polarity matters: scanners need dark modules on a light
+// background, and the terminal theme is light-on-dark, so we paint a white
+// canvas with black foreground inside the QR region. Each output cell
+// represents two stacked QR modules so the aspect is ~square in the terminal.
+function renderQrHalfBlocks(data: string): string[] {
+  const matrix = QRCode.create(data, { errorCorrectionLevel: 'L' });
+  const size: number = matrix.modules.size;
+  const bits: Uint8Array = matrix.modules.data;
+  const get = (x: number, y: number): number => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return 0;
+    return bits[y * size + x] ? 1 : 0;
+  };
+
+  const pad = 4; // QR quiet zone — scanners require ≥4 modules.
+  // Black fg on bright-white bg, reset at line end.
+  const ON = '\x1b[30;107m';
+  const OFF = '\x1b[0m';
+
+  const width = size + pad * 2;
+  const lines: string[] = [];
+  for (let y = -pad; y < size + pad; y += 2) {
+    let row = ON;
+    for (let x = -pad; x < size + pad; x++) {
+      const top = get(x, y);
+      const bot = get(x, y + 1);
+      if (top && bot) row += '█';      // both dark
+      else if (top)  row += '▀';        // top dark, bottom light
+      else if (bot)  row += '▄';        // top light, bottom dark
+      else           row += ' ';        // both light
+    }
+    row += OFF;
+    lines.push(row);
+  }
+  // Outer whitespace breathing room.
+  const blank = ON + ' '.repeat(width) + OFF;
+  return [blank, ...lines, blank];
 }

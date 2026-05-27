@@ -29,11 +29,11 @@ type PricePoint = {
   price: { base: number; offset: number; currencyUnit: string };
 };
 
-function toUsd(p: PricePoint): number {
-  // Galoy/Blink/BJ pricing convention: price = base * 10^-offset, then it's
-  // a per-sat USD-cent. Convert to USD per BTC.
-  const per = p.price.base * Math.pow(10, -p.price.offset); // USD-cents per sat
-  return per * 100_000_000 / 100; // sats per BTC, cents -> USD
+// base / 10^offset = price in céntimos (CRC minor unit) per BTC.
+// Divide by 100 to get CRC per BTC. Quote currency is implicit (CRC) — the
+// currencyUnit field says USDCENT but BJ's display currency is colones.
+function toCrc(p: PricePoint): number {
+  return p.price.base / Math.pow(10, p.price.offset) / 100;
 }
 
 export async function run(ctx: CommandContext): Promise<void> {
@@ -62,7 +62,7 @@ export async function run(ctx: CommandContext): Promise<void> {
     return;
   }
 
-  const prices = points.map(toUsd);
+  const prices = points.map(toCrc);
   const current = prices[prices.length - 1];
   const first = prices[0];
   const delta = current - first;
@@ -74,9 +74,10 @@ export async function run(ctx: CommandContext): Promise<void> {
 
   const arrow = delta >= 0 ? `${c.brightGreen}▲${R}` : `${c.brightMagenta}▼${R}`;
   const deltaColor = delta >= 0 ? c.brightGreen : c.brightMagenta;
+  const fmt = (n: number) => n.toLocaleString('es-CR', { maximumFractionDigits: 0 });
 
-  ctx.print(`  ${B}1 BTC${R}  =  ${B}${c.brightYellow}$${current.toLocaleString('en-US', { maximumFractionDigits: 0 })}${R} USD`);
-  ctx.print(`  ${D}24h${R}    ${arrow} ${deltaColor}${delta >= 0 ? '+' : ''}$${delta.toFixed(0)} (${pct.toFixed(2)}%)${R}`);
+  ctx.print(`  ${B}1 BTC${R}  =  ${B}${c.brightYellow}₡${fmt(current)}${R} CRC`);
+  ctx.print(`  ${D}24h${R}    ${arrow} ${deltaColor}${delta >= 0 ? '+' : ''}₡${fmt(delta)} (${pct.toFixed(2)}%)${R}`);
   ctx.print('');
   ctx.print(`  ${c.brightCyan}${sparkline(sampled)}${R}`);
   ctx.print(`  ${D}${'└─ 24h ago' + ' '.repeat(Math.max(0, sampled.length - 18)) + 'now ─┘'}${R}`);

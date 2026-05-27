@@ -3,7 +3,7 @@
 A tiny, dependency-free **Nostr client** built into the terminal.
 
 The `demo` opens a WebSocket to a public relay
-(`wss://relay.damus.io`), subscribes to my pubkey, and streams my
+(`wss://no.str.cr`), subscribes to my pubkey, and streams my
 latest notes into your session in real time.
 
 Nostr is the censorship-resistant protocol I'm most excited about

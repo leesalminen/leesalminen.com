@@ -6,15 +6,10 @@ const R = ansi.reset;
 const B = ansi.bold;
 const D = ansi.dim;
 
-const RELAY = 'wss://relay.damus.io';
+const RELAY = 'wss://no.str.cr';
 
-// TODO(lee): replace with your full 64-char hex pubkey (or pass one as an arg).
-// Contact info shows: 5f498ff8...643f3cacc — we can only put the full key here.
-const LEE_PUBKEY = '';
-
-// Falls back to fiatjaf — guaranteed-active so the demo always shows real
-// data while Lee's pubkey is unset.
-const FALLBACK_PUBKEY = '3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d';
+// npub14f26g7dddy6dpltc70da3pg4e5w2p4apzzqjuugnsr2ema6e3y6s2xv7lu
+const LEE_PUBKEY = 'aa55a479ad6934d0fd78f3dbd88515cd1ca0d7a110812e711380d59df7598935';
 
 type NostrEvent = {
   id: string;
@@ -39,12 +34,11 @@ function relativeTime(ts: number): string {
 
 export async function run(ctx: CommandContext): Promise<void> {
   const argPubkey = ctx.args[0];
-  const pubkey = (argPubkey || LEE_PUBKEY || FALLBACK_PUBKEY).toLowerCase();
-  const isFallback = !argPubkey && !LEE_PUBKEY;
+  const pubkey = (argPubkey || LEE_PUBKEY).toLowerCase();
 
   ctx.print('');
   ctx.print(`${B}${c.brightCyan}Nostr Feed${R}  ${D}— live stream from ${RELAY}${R}`);
-  ctx.print(`  ${D}pubkey:${R} ${c.brightYellow}${shortPubkey(pubkey)}${R}${isFallback ? ` ${D}(fiatjaf — Lee's npub not yet wired in)${R}` : ''}`);
+  ctx.print(`  ${D}pubkey:${R} ${c.brightYellow}${shortPubkey(pubkey)}${R}`);
   ctx.print('');
 
   const subId = 'lee-' + Math.random().toString(36).slice(2, 8);
