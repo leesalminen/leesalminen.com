@@ -578,6 +578,20 @@ export class TerminalUI {
     this.print(`${ansi.dim}${text}${R}`);
   }
 
+  // In-place progress line. Subsequent calls overwrite the same line via \r.
+  // Pass done=true (or pct>=100) to finalize with a newline.
+  printProgress(label: string, pct: number, suffix = '', done = false) {
+    const width = 28;
+    const clamped = Math.max(0, Math.min(100, pct));
+    const filled = Math.round((clamped / 100) * width);
+    const bar = '█'.repeat(filled) + '░'.repeat(width - filled);
+    const pctStr = clamped.toFixed(0).padStart(3, ' ');
+    const tail = suffix ? `  ${ansi.dim}${suffix}${R}` : '';
+    // \x1b[2K clears the whole line; \r returns the cursor to column 0.
+    this.term.write(`\r\x1b[2K${ansi.dim}${label}${R} [${c.brightCyan}${bar}${R}] ${pctStr}%${tail}`);
+    if (done || clamped >= 100) this.term.write('\r\n');
+  }
+
   // TUI modal: draws a centered-ish bordered box with a title and a numbered
   // list of options. Resolves with the chosen index (0-based) when the user
   // presses the matching number key — that keypress is the user gesture that

@@ -123,6 +123,8 @@ export class Agent {
           initialPrompts: [{ role: 'system', content: buildSystemPrompt() }],
           temperature: 0.6,
           topK: 3,
+          expectedInputs: [{ type: 'text', languages: ['en'] }],
+          expectedOutputs: [{ type: 'text', languages: ['en'] }],
         });
         return { status: 'ready' };
       }
@@ -146,24 +148,104 @@ export class Agent {
       this.status = 'ready';
       return { status: 'ready' };
     }
+    const startedAt = Date.now();
+    let lastPct = -1;
+    let lastTickAt = startedAt;
+    let sawProgress = false;
+    let lastAvail: 'unavailable' | 'downloadable' | 'downloading' | 'available' = 'downloadable';
+    const fmtElapsed = () => {
+      const s = Math.floor((Date.now() - startedAt) / 1000);
+      const m = Math.floor(s / 60);
+      return m > 0 ? `${m}m${(s % 60).toString().padStart(2, '0')}s` : `${s}s`;
+    };
+    // Chrome won't always fire downloadprogress (especially if the component
+    // updater is wedged). Use a signal so we can bail out and tell the user
+    // what to check, instead of hanging forever.
+    const ac = new AbortController();
+    // Grace windows:
+    //   - If availability is still 'downloadable' (i.e. Chrome never even
+    //     started the fetch) after 25s, give up — that's the component
+    //     updater being stuck.
+    //   - If availability moved to 'downloading' but we've gone 90s without a
+    //     single progress event, give up — the byte stream is wedged.
+    const STUCK_DOWNLOADABLE_MS = 25_000;
+    const STUCK_DOWNLOADING_MS = 90_000;
+    let timedOut = false;
+    const tick = async () => {
+      try {
+        lastAvail = await window.LanguageModel!.availability();
+      } catch {
+        /* ignore — keep last known */
+      }
+      const idleMs = Date.now() - lastTickAt;
+      const elapsedMs = Date.now() - startedAt;
+      const pct = lastPct < 0 ? 0 : lastPct;
+      let suffix: string;
+      if (!sawProgress && lastAvail === 'downloadable') {
+        suffix = `waiting for Chrome to start… ${fmtElapsed()} · state=${lastAvail}`;
+      } else if (!sawProgress && lastAvail === 'downloading') {
+        suffix = `Chrome reports downloading, no progress events yet · ${fmtElapsed()}`;
+      } else if (lastAvail === 'available') {
+        suffix = `finalizing… ${fmtElapsed()}`;
+      } else if (idleMs > 8000) {
+        suffix = `stalled ${Math.floor(idleMs / 1000)}s · ${fmtElapsed()} elapsed · state=${lastAvail}`;
+      } else {
+        suffix = `${fmtElapsed()} elapsed · state=${lastAvail}`;
+      }
+      this.ui.printProgress('model download', pct, suffix);
+      // Abort decisions.
+      if (!sawProgress && lastAvail === 'downloadable' && elapsedMs > STUCK_DOWNLOADABLE_MS) {
+        timedOut = true;
+        ac.abort();
+      } else if (lastAvail === 'downloading' && idleMs > STUCK_DOWNLOADING_MS) {
+        timedOut = true;
+        ac.abort();
+      }
+    };
+    const heartbeat = window.setInterval(tick, 1500);
+    void tick(); // immediate first paint
     try {
       this.session = await window.LanguageModel.create({
         initialPrompts: [{ role: 'system', content: buildSystemPrompt() }],
         temperature: 0.6,
         topK: 3,
+        expectedInputs: [{ type: 'text', languages: ['en'] }],
+        expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        signal: ac.signal,
         monitor: (m) => {
           m.addEventListener('downloadprogress', ((ev: Event) => {
             const e = ev as Event & { loaded: number };
-            const pct = Math.round((e.loaded ?? 0) * 100);
-            this.ui.printSystem(`  model download: ${pct}%`);
+            const pct = Math.min(100, Math.max(0, Math.round((e.loaded ?? 0) * 100)));
+            sawProgress = true;
+            lastTickAt = Date.now();
+            if (pct === lastPct) return;
+            lastPct = pct;
+            this.ui.printProgress('model download', pct, `${fmtElapsed()} elapsed`);
           }) as EventListener);
         },
       });
+      this.ui.printProgress('model download', 100, `done in ${fmtElapsed()}`, true);
       this.status = 'ready';
       return { status: 'ready' };
     } catch (err) {
+      this.ui.printProgress(
+        'model download',
+        lastPct < 0 ? 0 : lastPct,
+        timedOut ? `gave up after ${fmtElapsed()} · state=${lastAvail}` : `failed after ${fmtElapsed()}`,
+        true,
+      );
       this.status = 'unavailable';
+      if (timedOut) {
+        this.ui.print(`${c.yellow}Chrome's on-device model fetch appears stuck.${R}`);
+        this.ui.printSystem(`Try this:`);
+        this.ui.printSystem(`  1. Open chrome://components → "Optimization Guide On Device Model" → "Check for update"`);
+        this.ui.printSystem(`  2. Open chrome://on-device-internals → confirm eligibility (≥22GB free, unmetered network)`);
+        this.ui.printSystem(`  3. Fully quit and relaunch Chrome, then run "ai" again`);
+        return { status: 'unavailable', message: `download stuck (state=${lastAvail})` };
+      }
       return { status: 'unavailable', message: (err as Error).message };
+    } finally {
+      window.clearInterval(heartbeat);
     }
   }
 
