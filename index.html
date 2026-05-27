@@ -22,7 +22,227 @@
     <title>Lee Salminen</title>
   </head>
   <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <noscript>
+      <style>
+        body {
+          margin: 0;
+          padding: 0;
+          background: #0a0a0a;
+          color: #c8e6c8;
+          font-family: 'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace;
+          line-height: 1.55;
+          overflow: auto;
+        }
+        .nojs {
+          max-width: 760px;
+          margin: 0 auto;
+          padding: 32px 20px 80px;
+        }
+        .nojs header {
+          border-bottom: 1px solid #1f3a1f;
+          padding-bottom: 16px;
+          margin-bottom: 24px;
+        }
+        .nojs h1 {
+          color: #33ff33;
+          font-size: 1.8rem;
+          margin: 0 0 4px;
+          letter-spacing: 0.02em;
+        }
+        .nojs .tagline {
+          color: #00ffff;
+          margin: 0;
+          font-size: 0.95rem;
+        }
+        .nojs .notice {
+          color: #888;
+          font-size: 0.85rem;
+          margin-top: 12px;
+        }
+        .nojs h2 {
+          color: #ffdf6c;
+          font-size: 1.1rem;
+          margin: 28px 0 8px;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+        .nojs h2::before {
+          content: "› ";
+          color: #00ffff;
+        }
+        .nojs p, .nojs li {
+          color: #c8e6c8;
+        }
+        .nojs a {
+          color: #00ffff;
+          text-decoration: none;
+          border-bottom: 1px dotted #226622;
+        }
+        .nojs a:hover {
+          border-bottom-color: #00ffff;
+        }
+        .nojs ul {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+        .nojs ul.skills li {
+          margin-bottom: 6px;
+        }
+        .nojs ul.skills .cat {
+          color: #ffdf6c;
+          margin-right: 8px;
+        }
+        .nojs ul.projects li {
+          margin-bottom: 14px;
+        }
+        .nojs ul.projects .name {
+          color: #66e0ff;
+          font-weight: bold;
+        }
+        .nojs ul.projects .tag {
+          color: #888;
+          font-style: italic;
+          margin-left: 6px;
+        }
+        .nojs ul.locations li,
+        .nojs ul.family li,
+        .nojs ul.interests li,
+        .nojs ul.now li {
+          margin-bottom: 6px;
+        }
+        .nojs dl.contact {
+          display: grid;
+          grid-template-columns: max-content 1fr;
+          gap: 4px 16px;
+          margin: 0;
+        }
+        .nojs dl.contact dt {
+          color: #ffdf6c;
+        }
+        .nojs dl.contact dd {
+          margin: 0;
+          color: #c8e6c8;
+          word-break: break-all;
+        }
+        .nojs footer {
+          margin-top: 40px;
+          padding-top: 16px;
+          border-top: 1px solid #1f3a1f;
+          color: #666;
+          font-size: 0.8rem;
+        }
+      </style>
+      <main class="nojs">
+        <header>
+          <h1>Lee Salminen</h1>
+          <p class="tagline">father · husband · technologist · entrepreneur</p>
+          <p class="notice">
+            This site normally boots into an interactive terminal portfolio.
+            JavaScript is disabled, so here is the static version.
+          </p>
+        </header>
+
+        <section>
+          <h2>About</h2>
+          <p>
+            Hi, I'm Lee Salminen. I build software, mostly around Bitcoin,
+            Lightning, and the open web. I've lived in Buffalo, NYC, Boulder,
+            LA, and Costa Rica.
+          </p>
+        </section>
+
+        <section>
+          <h2>Now</h2>
+          <ul class="now">
+            <li>• Building open-source things around Bitcoin &amp; Lightning</li>
+            <li>• Tinkering with on-device AI agents</li>
+            <li>• Raising kids, climbing mountains, riding waves</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Projects</h2>
+          <ul class="projects">
+            <li>
+              <span class="name">Bitcoin Jungle</span>
+              <span class="tag">— open source · circular economy</span>
+              <div>A Bitcoin community + Lightning wallet in southern Costa Rica.</div>
+            </li>
+            <li>
+              <span class="name">Galoy / Blink contributions</span>
+              <span class="tag">— lightning · open source</span>
+              <div>Patches and integrations for the open-source Bitcoin banking stack.</div>
+            </li>
+            <li>
+              <span class="name">leesalminen.com</span>
+              <span class="tag">— this site</span>
+              <div>An agentic terminal portfolio. The Prompt API guides you through it.</div>
+            </li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Skills</h2>
+          <ul class="skills">
+            <li><span class="cat">Languages:</span> TypeScript · JavaScript · Go · Rust · Python · Bash</li>
+            <li><span class="cat">Frontend:</span> React · Vite · Svelte · Web Components · xterm.js</li>
+            <li><span class="cat">Backend:</span> Node.js · Postgres · Redis · GraphQL · gRPC</li>
+            <li><span class="cat">Bitcoin:</span> Lightning · LNURL · NWC · Liquid · Nostr</li>
+            <li><span class="cat">Infra:</span> Docker · Kubernetes · NixOS · Cloudflare · Linux</li>
+            <li><span class="cat">AI:</span> On-device LLMs · Tool use / agents · Prompt API · RAG</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Locations</h2>
+          <ul class="locations">
+            <li>🗽 <strong>Buffalo, NY</strong> — Where it began.</li>
+            <li>🗽 <strong>New York City, NY</strong> — Where it sped up.</li>
+            <li>🏔 <strong>Boulder, CO</strong> — Where it leveled up.</li>
+            <li>🌴 <strong>Los Angeles, CA</strong> — Where it stretched out.</li>
+            <li>🌊 <strong>Dominical, Costa Rica</strong> — Pura vida.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Interests</h2>
+          <ul class="interests">
+            <li>⚡ Bitcoin, Lightning, sound money</li>
+            <li>🌐 The open web, Nostr, freedom tech</li>
+            <li>🤖 On-device AI, agents, the offline-first future</li>
+            <li>🏔 Mountains, surf, the outdoors</li>
+            <li>👨‍👩‍👦 Family</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Family</h2>
+          <ul class="family">
+            <li>❤ <strong>Nikki</strong> — wife, partner-in-crime</li>
+            <li>🧒 <strong>Parker</strong> — son, future captain</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Contact</h2>
+          <dl class="contact">
+            <dt>email</dt>
+            <dd><a href="mailto:me@leesalminen.com">me@leesalminen.com</a></dd>
+            <dt>github</dt>
+            <dd><a href="https://github.com/leesalminen" rel="noopener">github.com/leesalminen</a></dd>
+            <dt>nostr</dt>
+            <dd>npub: 5f498ff8…643f3cacc</dd>
+            <dt>site</dt>
+            <dd><a href="https://leesalminen.com">leesalminen.com</a></dd>
+          </dl>
+        </section>
+
+        <footer>
+          Enable JavaScript for the full interactive terminal experience.
+        </footer>
+      </main>
+    </noscript>
     <div id="terminal"></div>
     <div id="status-bar">
       <span id="status-left"></span>
